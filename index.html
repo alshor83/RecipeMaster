@@ -1,0 +1,420 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#c05621" />
+  <title>Kitchen Recipe Card</title>
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Caveat:wght@500;700&family=Patrick+Hand&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --paper: #fdfbf7;
+      --line: #d6e4f0;
+      --margin-red: #e5989b;
+      --ink: #2b2d42;
+      --accent: #b5491c;
+      --muted: #6c757d;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 16px;
+      background: #e8e2d5;
+      font-family: 'Patrick Hand', cursive, sans-serif;
+      color: var(--ink);
+      font-size: 19px;
+    }
+    .container { max-width: 720px; margin: 0 auto; }
+    .controls-panel {
+      background: #fff;
+      padding: 14px;
+      border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+      margin-bottom: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
+    input[type="text"], textarea {
+      flex: 1;
+      padding: 8px 12px;
+      border: 1px solid #ccc;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 17px;
+    }
+    button {
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      padding: 8px 14px;
+      border-radius: 8px;
+      font-family: inherit;
+      font-size: 18px;
+      cursor: pointer;
+    }
+    button.secondary { background: #4a5568; }
+    button.active { background: #2f855a; }
+    .card {
+      background: var(--paper);
+      background-image: linear-gradient(var(--line) 1px, transparent 1px);
+      background-size: 100% 34px;
+      border-radius: 10px;
+      padding: 28px 28px 36px 56px;
+      box-shadow: 0 10px 25px rgba(0,0,0,0.15);
+      position: relative;
+      border: 1px solid #dcd5c7;
+      line-height: 34px;
+    }
+    .card::before {
+      content: '';
+      position: absolute;
+      top: 0; bottom: 0; left: 42px;
+      width: 2px;
+      background: var(--margin-red);
+    }
+    h1 {
+      font-family: 'Caveat', cursive;
+      font-size: 40px;
+      margin: 0 0 10px 0;
+      color: var(--accent);
+      line-height: 34px;
+    }
+    h2 {
+      font-family: 'Caveat', cursive;
+      font-size: 30px;
+      margin: 18px 0 4px 0;
+      color: var(--accent);
+      line-height: 34px;
+    }
+    ul, ol { padding-left: 4px; margin: 0; list-style: none; }
+    li { display: flex; align-items: flex-start; gap: 10px; }
+    li.done span.text { text-decoration: line-through; color: var(--muted); }
+    input[type="checkbox"] {
+      width: 18px; height: 18px; margin-top: 8px; accent-color: var(--accent); cursor: pointer;
+    }
+    .timer-btn {
+      display: inline-block;
+      background: #fff3e0;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      padding: 0 8px;
+      border-radius: 12px;
+      font-size: 15px;
+      line-height: 24px;
+      margin-left: 6px;
+    }
+    .status { font-size: 15px; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <div class="controls-panel">
+      <div class="row">
+        <input type="text" id="urlInput" placeholder="Paste recipe URL (e.g., https://...)" />
+        <button onclick="fetchRecipe()">Fetch URL</button>
+        <button class="secondary" onclick="togglePaste()">Paste Text</button>
+      </div>
+      <div id="pasteBox" style="display:none; flex-direction:column; gap:8px;">
+        <textarea id="rawText" rows="6" placeholder="Paste recipe title, Ingredients:, and Instructions: here..."></textarea>
+        <button onclick="parseRawText()">Load Pasted Recipe</button>
+      </div>
+      <div class="row" style="justify-content: space-between;">
+        <label><strong>Yield: <span id="yieldLabel">1x</span></strong>
+          <input type="range" id="yieldSlider" min="0.5" max="4" step="0.25" value="1" oninput="updateYield(this.value)" />
+        </label>
+        <div class="row">
+          <button id="wakeBtn" class="secondary" onclick="toggleWakeLock()">☀️ Keep Awake: Off</button>
+          <button id="ttsBtn" onclick="toggleSpeech()">🔊 Read Aloud</button>
+        </div>
+      </div>
+      <div id="statusMsg" class="status"></div>
+    </div>
+
+    <div class="card">
+      <h1 id="recipeTitle">Dippable Cookie Caramel</h1>
+      <h2>Ingredients</h2>
+      <ul id="ingredientList"></ul>
+      <h2>Instructions</h2>
+      <ol id="stepList"></ol>
+    </div>
+  </div>
+
+  <script>
+    let currentRecipe = {
+      title: "Dippable Cookie Caramel",
+      ingredients: [
+        "1 cup (200g) granulated sugar",
+        "1/2 cup (100g) packed brown sugar",
+        "1/2 cup (113g) unsalted butter, cubed",
+        "1 1/4 cups (300ml) heavy cream",
+        "1/4 cup (85g) honey",
+        "1 teaspoon fresh lemon juice",
+        "1/2 teaspoon salt",
+        "1 1/2 teaspoons pure vanilla extract"
+      ],
+      steps: [
+        "Combine the granulated sugar, brown sugar, butter, heavy cream, honey, lemon juice, and salt in a medium, heavy-bottomed saucepan.",
+        "Stir over medium heat until the butter melts and the sugar dissolves completely.",
+        "Bring to a gentle boil, then reduce heat to medium-low. Simmer for 5 to 8 minutes, stirring occasionally, until thickened and reaching 225°F–230°F on a candy thermometer.",
+        "Remove from heat and carefully stir in the vanilla extract.",
+        "Let cool for 15 to 20 minutes until warm and thick.",
+        "Dip cooled cookies into the caramel and place on parchment paper to set, or serve warm in a bowl for dipping."
+      ]
+    };
+
+    let scale = 1;
+    let wakeLock = null;
+    let activeTimers = {};
+
+    const UNICODE_FRACS = {
+      '¼': 0.25, '½': 0.5, '¾': 0.75,
+      '⅓': 1/3, '⅔': 2/3,
+      '⅛': 0.125, '⅜': 0.375, '⅝': 0.625, '⅞': 0.875
+    };
+
+    function parseQuantity(str) {
+      let total = 0;
+      str.trim().split(/\s+/).forEach(part => {
+        if (UNICODE_FRACS[part]) {
+          total += UNICODE_FRACS[part];
+        } else if (part.includes('/')) {
+          const parts = part.split('/');
+          const n = Number(parts[0]);
+          const d = Number(parts[1]);
+          if (d) total += n / d;
+        } else if (!isNaN(Number(part))) {
+          total += Number(part);
+        }
+      });
+      return total;
+    }
+
+    function formatQuantity(num) {
+      const whole = Math.floor(num);
+      const rem = num - whole;
+      const fracs = [
+        [0.125, '1/8'], [0.25, '1/4'], [0.333, '1/3'], [0.375, '3/8'],
+        [0.5, '1/2'], [0.625, '5/8'], [0.666, '2/3'], [0.75, '3/4'], [0.875, '7/8']
+      ];
+      let closest = '';
+      for (let i = 0; i < fracs.length; i++) {
+        if (Math.abs(rem - fracs[i][0]) < 0.04) {
+          closest = fracs[i][1];
+          break;
+        }
+      }
+      if (closest) return whole > 0 ? whole + ' ' + closest : closest;
+      return Number.isInteger(num) ? String(num) : num.toFixed(2).replace(/\.?0+$/, '');
+    }
+
+    function scaleLine(line, factor) {
+      return line
+        .replace(/^(\d+\s+\d+\/\d+|\d+\/\d+|\d+(?:\.\d+)?|[¼½¾⅓⅔⅛⅜⅝⅞])/, function(match) {
+          const val = parseQuantity(match);
+          return val ? formatQuantity(val * factor) : match;
+        })
+        .replace(/\((\d+(?:\.\d+)?)\s*(g|ml|oz)\)/gi, function(_, num, unit) {
+          return '(' + Math.round(Number(num) * factor) + unit + ')';
+        });
+    }
+
+    function renderRecipe() {
+      document.getElementById('recipeTitle').textContent = currentRecipe.title;
+      const ingEl = document.getElementById('ingredientList');
+      ingEl.innerHTML = '';
+      currentRecipe.ingredients.forEach(function(ing) {
+        const li = document.createElement('li');
+        li.innerHTML =
+          '<input type="checkbox" onchange="this.parentElement.classList.toggle(\'done\')" />' +
+          '<span class="text">' + scaleLine(ing, scale) + '</span>';
+        ingEl.appendChild(li);
+      });
+
+      const stepEl = document.getElementById('stepList');
+      stepEl.innerHTML = '';
+      currentRecipe.steps.forEach(function(step, idx) {
+        const li = document.createElement('li');
+        const timeMatch = step.match(/(\d+)(?:\s*(?:to|-|–)\s*(\d+))?\s*(minute|min|hour|hr)s?/i);
+        let timerHtml = '';
+        if (timeMatch) {
+          const rawMins = Number(timeMatch[2] || timeMatch[1]);
+          const isHours = /hour|hr/i.test(timeMatch[3]);
+          const mins = rawMins * (isHours ? 60 : 1);
+          timerHtml =
+            '<button class="timer-btn" id="tbtn-' + idx + '" onclick="startTimer(' + idx + ', ' + (mins * 60) + ')">⏱ ' + mins + 'm</button>';
+        }
+        li.innerHTML =
+          '<input type="checkbox" onchange="this.parentElement.classList.toggle(\'done\')" />' +
+          '<span class="text"><strong>' + (idx + 1) + '.</strong> ' + step + ' ' + timerHtml + '</span>';
+        stepEl.appendChild(li);
+      });
+    }
+
+    function playChime() {
+      try {
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const osc = ctx.createOscillator();
+        const gain = ctx.createGain();
+        osc.type = 'sine';
+        osc.frequency.setValueAtTime(587.33, ctx.currentTime);
+        osc.frequency.setValueAtTime(880, ctx.currentTime + 0.25);
+        gain.gain.setValueAtTime(0.25, ctx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 1.2);
+        osc.connect(gain);
+        gain.connect(ctx.destination);
+        osc.start();
+        osc.stop(ctx.currentTime + 1.2);
+      } catch (e) {}
+    }
+
+    function startTimer(id, seconds) {
+      const btn = document.getElementById('tbtn-' + id);
+      if (activeTimers[id]) {
+        clearInterval(activeTimers[id]);
+        delete activeTimers[id];
+        btn.textContent = '⏱ ' + Math.round(seconds / 60) + 'm';
+        return;
+      }
+      let rem = seconds;
+      activeTimers[id] = setInterval(function() {
+        rem--;
+        const m = Math.floor(rem / 60);
+        const s = String(rem % 60).padStart(2, '0');
+        btn.textContent = '⏳ ' + m + ':' + s;
+        if (rem <= 0) {
+          clearInterval(activeTimers[id]);
+          delete activeTimers[id];
+          btn.textContent = '🔔 Done!';
+          playChime();
+        }
+      }, 1000);
+    }
+
+    function updateYield(val) {
+      scale = Number(val);
+      document.getElementById('yieldLabel').textContent = scale + 'x';
+      renderRecipe();
+    }
+
+    function togglePaste() {
+      const box = document.getElementById('pasteBox');
+      box.style.display = box.style.display === 'none' ? 'flex' : 'none';
+    }
+
+    function parseRawText() {
+      const text = document.getElementById('rawText').value.trim();
+      if (!text) return;
+      const lines = text.split('\n').map(function(l) { return l.trim(); }).filter(Boolean);
+      const title = lines[0].replace(/^#+\s*/, '');
+      const ingredients = [];
+      const steps = [];
+      let mode = 'ing';
+      for (let i = 1; i < lines.length; i++) {
+        const l = lines[i];
+        if (/^ingredients/i.test(l)) { mode = 'ing'; continue; }
+        if (/^(instructions|directions|method|steps)/i.test(l)) { mode = 'step'; continue; }
+        if (mode === 'ing') {
+          ingredients.push(l.replace(/^[-*•]\s*/, ''));
+        } else {
+          steps.push(l.replace(/^\d+[\.\)]\s*/, ''));
+        }
+      }
+      currentRecipe = { title: title, ingredients: ingredients, steps: steps };
+      renderRecipe();
+      togglePaste();
+      document.getElementById('statusMsg').textContent = 'Pasted recipe loaded!';
+    }
+
+    async function fetchRecipe() {
+      const url = document.getElementById('urlInput').value.trim();
+      const status = document.getElementById('statusMsg');
+      if (!url) return;
+      status.textContent = 'Fetching recipe...';
+      try {
+        const res = await fetch('https://api.allorigins.win/get?url=' + encodeURIComponent(url));
+        const data = await res.json();
+        const doc = new DOMParser().parseFromString(data.contents, 'text/html');
+        const scripts = doc.querySelectorAll('script[type="application/ld+json"]');
+        let found = null;
+        scripts.forEach(function(s) {
+          try {
+            const json = JSON.parse(s.textContent);
+            const items = Array.isArray(json) ? json : (json['@graph'] || [json]);
+            const recipe = items.find(function(item) {
+              return item['@type'] === 'Recipe' || (Array.isArray(item['@type']) && item['@type'].includes('Recipe'));
+            });
+            if (recipe) found = recipe;
+          } catch (e) {}
+        });
+        if (!found) throw new Error('No structured recipe found on that page. Try Paste Text instead.');
+        currentRecipe = {
+          title: found.name || 'Imported Recipe',
+          ingredients: found.recipeIngredient || [],
+          steps: (found.recipeInstructions || []).map(function(s) {
+            return typeof s === 'string' ? s : s.text;
+          }).filter(Boolean)
+        };
+        renderRecipe();
+        status.textContent = 'Recipe loaded!';
+      } catch (err) {
+        status.textContent = err.message;
+      }
+    }
+
+    async function toggleWakeLock() {
+      const btn = document.getElementById('wakeBtn');
+      if (!('wakeLock' in navigator)) {
+        document.getElementById('statusMsg').textContent = 'Screen Wake Lock is not supported in this browser.';
+        return;
+      }
+      if (wakeLock) {
+        await wakeLock.release();
+        wakeLock = null;
+        btn.textContent = '☀️ Keep Awake: Off';
+        btn.classList.remove('active');
+      } else {
+        wakeLock = await navigator.wakeLock.request('screen');
+        btn.textContent = '☀️ Keep Awake: On';
+        btn.classList.add('active');
+      }
+    }
+
+    function toggleSpeech() {
+      const btn = document.getElementById('ttsBtn');
+      if (speechSynthesis.speaking) {
+        speechSynthesis.cancel();
+        btn.textContent = '🔊 Read Aloud';
+        return;
+      }
+      const text = currentRecipe.title + '. Instructions. ' +
+        currentRecipe.steps.map(function(s, i) { return 'Step ' + (i + 1) + '. ' + s; }).join(' ');
+      const utter = new SpeechSynthesisUtterance(text);
+      const voices = speechSynthesis.getVoices();
+      const preferred = voices.find(function(v) {
+        return /samantha|victoria|karen|moira|zira|google uk english female|natural/i.test(v.name);
+      });
+      if (preferred) utter.voice = preferred;
+      utter.rate = 0.9;
+      utter.pitch = 0.95;
+      utter.onend = function() { btn.textContent = '🔊 Read Aloud'; };
+      btn.textContent = '⏹ Stop Reading';
+      speechSynthesis.speak(utter);
+    }
+
+    if ('speechSynthesis' in window) {
+      speechSynthesis.onvoiceschanged = function() { speechSynthesis.getVoices(); };
+    }
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./sw.js').catch(function() {});
+    }
+
+    renderRecipe();
+  </script>
+</body>
+</html>

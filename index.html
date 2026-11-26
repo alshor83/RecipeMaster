@@ -39,13 +39,16 @@
       gap: 10px;
     }
     .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; }
-    input[type="text"], textarea {
+    input[type="text"], input[type="search"], textarea, select {
       flex: 1;
+      min-width: 140px;
       padding: 8px 12px;
       border: 1px solid #ccc;
       border-radius: 8px;
       font-family: inherit;
       font-size: 17px;
+      background: #fff;
+      color: var(--ink);
     }
     button {
       background: var(--accent);
@@ -59,6 +62,8 @@
     }
     button.secondary { background: #4a5568; }
     button.active { background: #2f855a; }
+    button.danger { background: #9b2c2c; }
+    button.small { padding: 4px 10px; font-size: 15px; }
     .card {
       background: var(--paper);
       background-image: linear-gradient(var(--line) 1px, transparent 1px);
@@ -108,6 +113,33 @@
       line-height: 24px;
       margin-left: 6px;
     }
+    .tags-bar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      align-items: center;
+      margin-bottom: 6px;
+      line-height: 24px;
+    }
+    .tag-chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      background: #fff3e0;
+      color: var(--accent);
+      border: 1px solid var(--accent);
+      border-radius: 14px;
+      padding: 1px 10px;
+      font-size: 15px;
+      line-height: 22px;
+    }
+    .tag-chip button {
+      background: none;
+      color: var(--accent);
+      padding: 0;
+      font-size: 15px;
+      line-height: 1;
+    }
     .status { font-size: 15px; color: var(--muted); }
   </style>
 </head>
@@ -132,11 +164,37 @@
           <button id="ttsBtn" onclick="toggleSpeech()">🔊 Read Aloud</button>
         </div>
       </div>
+
+      <div class="row">
+        <input type="search" id="boxSearch" placeholder="Search saved recipes (title, ingredient, tag)..." oninput="renderRecipeBoxUI()" />
+        <select id="tagFilterSelect" onchange="renderRecipeBoxUI()" style="max-width: 180px;">
+          <option value="">All Tags</option>
+        </select>
+      </div>
+
+      <div class="row">
+        <label for="recipeBoxSelect"><strong>Recipe Box (<span id="boxCount">0</span>):</strong></label>
+        <select id="recipeBoxSelect" onchange="loadFromRecipeBox(this.value)">
+          <option value="">-- Saved Recipes --</option>
+        </select>
+        <button class="secondary" onclick="loadFromRecipeBox(document.getElementById('recipeBoxSelect').value)">Open</button>
+        <button class="danger" onclick="removeSelectedFromBox()">Delete</button>
+      </div>
+
+      <div class="row">
+        <input type="text" id="newTagInput" placeholder="Add tag (e.g., dessert, quick, baking)..." onkeydown="if(event.key==='Enter'){addTagToCurrentRecipe();}" />
+        <button class="secondary" onclick="addTagToCurrentRecipe()">+ Add Tag</button>
+        <button class="secondary" onclick="exportRecipeBoxJson()">Export JSON</button>
+        <button class="secondary" onclick="document.getElementById('importJsonInput').click()">Import JSON</button>
+        <input type="file" id="importJsonInput" accept=".json,application/json" style="display:none;" onchange="importRecipeBoxJson(event)" />
+      </div>
+
       <div id="statusMsg" class="status"></div>
     </div>
 
     <div class="card">
       <h1 id="recipeTitle">Dippable Cookie Caramel</h1>
+      <div id="currentTagsBar" class="tags-bar"></div>
       <h2>Ingredients</h2>
       <ul id="ingredientList"></ul>
       <h2>Instructions</h2>
@@ -145,8 +203,12 @@
   </div>
 
   <script>
+    const RECIPE_BOX_KEY = 'kitchen_recipe_box_v1';
+
     let currentRecipe = {
+      id: 'dippable-cookie-caramel',
       title: "Dippable Cookie Caramel",
+      tags: ["caramel", "dessert", "dip"],
       ingredients: [
         "1 cup (200g) granulated sugar",
         "1/2 cup (100g) packed brown sugar",
@@ -176,6 +238,18 @@
       '⅓': 1/3, '⅔': 2/3,
       '⅛': 0.125, '⅜': 0.375, '⅝': 0.625, '⅞': 0.875
     };
+
+    function normalizeTags(tags) {
+      if (!Array.isArray(tags)) return [];
+      const seen = new Set();
+      return tags
+        .map(function(t) { return String(t || '').trim().toLowerCase(); })
+        .filter(function(t) {
+          if (!t || seen.has(t)) return false;
+          seen.add(t);
+          return true;
+        });
+    }
 
     function parseQuantity(str) {
       let total = 0;
@@ -223,8 +297,29 @@
         });
     }
 
+    function renderCurrentTags() {
+      const bar = document.getElementById('currentTagsBar');
+      if (!bar) return;
+      const tags = normalizeTags(currentRecipe.tags);
+      currentRecipe.tags = tags;
+      bar.innerHTML = '';
+
+      if (tags.length === 0) return;
+
+      tags.forEach(function(tag) {
+        const chip = document.createElement('span');
+        chip.className = 'tag-chip';
+        chip.innerHTML =
+          '<span>#' + tag + '</span>' +
+          '<button title="Remove tag" onclick="removeTagFromCurrentRecipe(\'' + tag.replace(/'/g, "\\'") + '\')">×</button>';
+        bar.appendChild(chip);
+      });
+    }
+
     function renderRecipe() {
       document.getElementById('recipeTitle').textContent = currentRecipe.title;
+      renderCurrentTags();
+
       const ingEl = document.getElementById('ingredientList');
       ingEl.innerHTML = '';
       currentRecipe.ingredients.forEach(function(ing) {
@@ -253,6 +348,257 @@
           '<span class="text"><strong>' + (idx + 1) + '.</strong> ' + step + ' ' + timerHtml + '</span>';
         stepEl.appendChild(li);
       });
+    }
+
+    function getRecipeBox() {
+      try {
+        const raw = localStorage.getItem(RECIPE_BOX_KEY);
+        const parsed = raw ? JSON.parse(raw) : [];
+        return Array.isArray(parsed) ? parsed : [];
+      } catch (err) {
+        console.error('Error reading Recipe Box:', err);
+        return [];
+      }
+    }
+
+    function setRecipeBox(box) {
+      localStorage.setItem(RECIPE_BOX_KEY, JSON.stringify(box));
+    }
+
+    function makeRecipeId(title, sourceUrl = '') {
+      const base = `${(title || 'recipe').toLowerCase().trim()}|${sourceUrl.toLowerCase().trim()}`;
+      return base.replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || `recipe-${Date.now()}`;
+    }
+
+    function saveToRecipeBox(recipe, sourceUrl = '') {
+      if (!recipe || !recipe.title) return null;
+
+      const cleanTitle = String(recipe.title).trim();
+      const cleanUrl = String(sourceUrl || recipe.sourceUrl || '').trim();
+      const id = recipe.id || makeRecipeId(cleanTitle, cleanUrl);
+      const tags = normalizeTags(recipe.tags);
+
+      const cardToSave = {
+        id,
+        title: cleanTitle,
+        sourceUrl: cleanUrl,
+        tags,
+        ingredients: Array.isArray(recipe.ingredients) ? recipe.ingredients : [],
+        steps: Array.isArray(recipe.steps) ? recipe.steps : [],
+        savedAt: recipe.savedAt || new Date().toISOString()
+      };
+
+      const box = getRecipeBox();
+      const existingIndex = box.findIndex(function(item) {
+        return item.id === id;
+      });
+
+      if (existingIndex !== -1) {
+        box[existingIndex] = {
+          ...box[existingIndex],
+          ...cardToSave,
+          tags: tags.length ? tags : normalizeTags(box[existingIndex].tags)
+        };
+      } else {
+        box.unshift(cardToSave);
+      }
+
+      try {
+        setRecipeBox(box);
+        currentRecipe.id = cardToSave.id;
+        currentRecipe.tags = cardToSave.tags;
+        renderRecipeBoxUI(id);
+        return cardToSave;
+      } catch (err) {
+        console.error('Error saving to Recipe Box:', err);
+        document.getElementById('statusMsg').textContent = 'Could not save to Recipe Box (storage full or blocked).';
+        return null;
+      }
+    }
+
+    function addTagToCurrentRecipe() {
+      const input = document.getElementById('newTagInput');
+      if (!input) return;
+      const incoming = input.value
+        .split(',')
+        .map(function(t) { return t.trim().toLowerCase(); })
+        .filter(Boolean);
+      if (!incoming.length) return;
+
+      currentRecipe.tags = normalizeTags([...(currentRecipe.tags || []), ...incoming]);
+      input.value = '';
+      saveToRecipeBox(currentRecipe);
+      renderRecipe();
+      document.getElementById('statusMsg').textContent = 'Updated tags on "' + currentRecipe.title + '".';
+    }
+
+    function removeTagFromCurrentRecipe(tagToRemove) {
+      currentRecipe.tags = normalizeTags(currentRecipe.tags).filter(function(t) {
+        return t !== tagToRemove;
+      });
+      saveToRecipeBox(currentRecipe);
+      renderRecipe();
+      document.getElementById('statusMsg').textContent = 'Removed #' + tagToRemove + '.';
+    }
+
+    function refreshTagFilterOptions(box) {
+      const tagSelect = document.getElementById('tagFilterSelect');
+      if (!tagSelect) return;
+      const previous = tagSelect.value;
+      const allTags = new Set();
+
+      box.forEach(function(item) {
+        normalizeTags(item.tags).forEach(function(t) { allTags.add(t); });
+      });
+
+      tagSelect.innerHTML = '<option value="">All Tags</option>';
+      Array.from(allTags).sort().forEach(function(tag) {
+        const opt = document.createElement('option');
+        opt.value = tag;
+        opt.textContent = '#' + tag;
+        if (tag === previous) opt.selected = true;
+        tagSelect.appendChild(opt);
+      });
+    }
+
+    function renderRecipeBoxUI(selectedId = '') {
+      const box = getRecipeBox();
+      refreshTagFilterOptions(box);
+
+      const select = document.getElementById('recipeBoxSelect');
+      const countEl = document.getElementById('boxCount');
+      const searchVal = (document.getElementById('boxSearch')?.value || '').trim().toLowerCase();
+      const activeTag = document.getElementById('tagFilterSelect')?.value || '';
+      if (!select || !countEl) return;
+
+      const filtered = box.filter(function(item) {
+        const itemTags = normalizeTags(item.tags);
+        if (activeTag && !itemTags.includes(activeTag)) return false;
+        if (!searchVal) return true;
+
+        const haystack = [
+          item.title || '',
+          item.sourceUrl || '',
+          itemTags.join(' '),
+          (item.ingredients || []).join(' '),
+          (item.steps || []).join(' ')
+        ].join(' ').toLowerCase();
+
+        return haystack.includes(searchVal);
+      });
+
+      countEl.textContent = filtered.length === box.length
+        ? String(box.length)
+        : filtered.length + '/' + box.length;
+
+      select.innerHTML = '<option value="">-- Saved Recipes --</option>';
+      filtered.forEach(function(item) {
+        const opt = document.createElement('option');
+        opt.value = item.id;
+        const tagSuffix = normalizeTags(item.tags).length ? ' [' + normalizeTags(item.tags).join(', ') + ']' : '';
+        opt.textContent = item.title + tagSuffix;
+        if (item.id === selectedId) opt.selected = true;
+        select.appendChild(opt);
+      });
+    }
+
+    function loadFromRecipeBox(id) {
+      if (!id) return;
+      const box = getRecipeBox();
+      const found = box.find(function(item) {
+        return item.id === id;
+      });
+      if (!found) return;
+
+      currentRecipe = {
+        id: found.id,
+        title: found.title,
+        sourceUrl: found.sourceUrl || '',
+        tags: normalizeTags(found.tags),
+        ingredients: (found.ingredients || []).slice(),
+        steps: (found.steps || []).slice()
+      };
+      scale = 1;
+      document.getElementById('yieldSlider').value = 1;
+      document.getElementById('yieldLabel').textContent = '1x';
+      renderRecipe();
+      document.getElementById('statusMsg').textContent = 'Opened "' + found.title + '" from Recipe Box.';
+    }
+
+    function removeSelectedFromBox() {
+      const select = document.getElementById('recipeBoxSelect');
+      const id = select.value;
+      if (!id) return;
+
+      const box = getRecipeBox().filter(function(item) {
+        return item.id !== id;
+      });
+      setRecipeBox(box);
+      renderRecipeBoxUI('');
+      document.getElementById('statusMsg').textContent = 'Removed recipe from Recipe Box.';
+    }
+
+    function exportRecipeBoxJson() {
+      const box = getRecipeBox();
+      const payload = {
+        app: 'Kitchen Recipe Card',
+        version: 1,
+        exportedAt: new Date().toISOString(),
+        recipes: box
+      };
+      const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'recipe-box-' + new Date().toISOString().slice(0, 10) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      document.getElementById('statusMsg').textContent = 'Exported ' + box.length + ' recipe(s) to JSON.';
+    }
+
+    function importRecipeBoxJson(event) {
+      const file = event.target.files && event.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = function(e) {
+        try {
+          const parsed = JSON.parse(String(e.target.result || ''));
+          const incomingList = Array.isArray(parsed)
+            ? parsed
+            : (Array.isArray(parsed.recipes) ? parsed.recipes : null);
+
+          if (!incomingList) {
+            throw new Error('Invalid Recipe Box JSON format.');
+          }
+
+          let importedCount = 0;
+          incomingList.forEach(function(item) {
+            if (item && item.title) {
+              saveToRecipeBox({
+                id: item.id,
+                title: item.title,
+                sourceUrl: item.sourceUrl || '',
+                tags: normalizeTags(item.tags),
+                ingredients: Array.isArray(item.ingredients) ? item.ingredients : [],
+                steps: Array.isArray(item.steps) ? item.steps : [],
+                savedAt: item.savedAt
+              });
+              importedCount++;
+            }
+          });
+
+          renderRecipeBoxUI('');
+          document.getElementById('statusMsg').textContent = 'Imported ' + importedCount + ' recipe(s) into Recipe Box.';
+        } catch (err) {
+          document.getElementById('statusMsg').textContent = 'Import failed: ' + err.message;
+        } finally {
+          event.target.value = '';
+        }
+      };
+      reader.readAsText(file);
     }
 
     function playChime() {
@@ -324,10 +670,11 @@
           steps.push(l.replace(/^\d+[\.\)]\s*/, ''));
         }
       }
-      currentRecipe = { title: title, ingredients: ingredients, steps: steps };
+      currentRecipe = { title: title, tags: [], ingredients: ingredients, steps: steps };
+      saveToRecipeBox(currentRecipe);
       renderRecipe();
       togglePaste();
-      document.getElementById('statusMsg').textContent = 'Pasted recipe loaded!';
+      document.getElementById('statusMsg').textContent = 'Pasted recipe loaded & saved to Recipe Box!';
     }
 
     async function fetchRecipe() {
@@ -352,15 +699,26 @@
           } catch (e) {}
         });
         if (!found) throw new Error('No structured recipe found on that page. Try Paste Text instead.');
+
+        const rawKeywords = Array.isArray(found.keywords)
+          ? found.keywords
+          : (typeof found.keywords === 'string' ? found.keywords.split(',') : []);
+        const rawCategory = found.recipeCategory
+          ? (Array.isArray(found.recipeCategory) ? found.recipeCategory : [found.recipeCategory])
+          : [];
+
         currentRecipe = {
           title: found.name || 'Imported Recipe',
+          sourceUrl: url,
+          tags: normalizeTags([...rawKeywords, ...rawCategory]).slice(0, 6),
           ingredients: found.recipeIngredient || [],
           steps: (found.recipeInstructions || []).map(function(s) {
             return typeof s === 'string' ? s : s.text;
           }).filter(Boolean)
         };
+        saveToRecipeBox(currentRecipe, url);
         renderRecipe();
-        status.textContent = 'Recipe loaded!';
+        status.textContent = 'Recipe loaded & saved to Recipe Box!';
       } catch (err) {
         status.textContent = err.message;
       }
@@ -414,6 +772,7 @@
       navigator.serviceWorker.register('./sw.js').catch(function() {});
     }
 
+    renderRecipeBoxUI('');
     renderRecipe();
   </script>
 </body>
